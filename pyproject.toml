@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentix-deployment-docker"
+version = "0.1.0"
+description = "Docker deployment backend for Agentix"
+requires-python = ">=3.11"
+dependencies = [
+    # `Sandbox`, `Deployment` Protocol, `SandboxConfig`, `SandboxInfo`,
+    # and the `SandboxId` branded NewType all live in core Agentix.
+    "agentix>=0.1.0",
+    # The backend talks to dockerd over a unix socket via httpx (which
+    # core agentix already pulls in, but we declare it explicitly so
+    # `pip install agentix-deployment-docker` is self-sufficient).
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+]
+
+# `pip install agentix-deployment-docker` makes `agentix deploy local`
+# work with zero framework changes — the framework walks this group
+# at startup and routes the `local` backend name to DockerDeployment.
+[project.entry-points."agentix.deployment"]
+local = "agentix.deployment.docker:DockerDeployment"
+
+[tool.hatch.build.targets.wheel]
+# Ship one file at `agentix/deployment/docker.py`. The directory has
+# no __init__.py in this wheel — that file is owned by core Agentix
+# and pip installs siblings into the same site-packages dir.
+packages = ["agentix"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.pyright]
+include = ["agentix"]
+exclude = ["**/__pycache__", ".venv"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
