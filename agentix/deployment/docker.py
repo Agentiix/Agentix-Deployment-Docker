@@ -3,26 +3,40 @@
 Design:
 
   Two images, one container. `config.runtime_image` is the generic
-  Agentix bundle from `agentix build` (carries `/nix/runtime/` with the
-  server + user code + Python deps). `config.image` is the task-specific
-  base the workload runs against. We overlay the runtime onto the task
-  image at start time using `--mount type=image` — no rebuild, no copy,
-  no intermediate state. Requires Docker Engine >= 25.0.
+  Agentix bundle from `agentix build` (carries `/nix/runtime/bin/` and
+  the full Python closure under `/nix/store/...`). `config.image` is
+  the task-specific base the workload runs against. The runtime is
+  overlaid onto the task container's `/nix` so the agentix-server
+  entrypoint and its store paths resolve regardless of the task
+  image's distribution.
+
+  Overlay mechanism: a per-runtime-image stopped "carrier" container
+  declares the runtime's `/nix` as a VOLUME (set in the image's config
+  by `agentix build`); sandbox containers re-use it with
+  `--volumes-from <carrier>:ro`. One stopped carrier per distinct
+  runtime_image — they cost only metadata.
+
+  (`--mount type=image,subpath=nix` would let us skip the carrier
+  entirely with one docker invocation, but `subpath` isn't yet
+  supported on image mounts in stable Docker — landing in a future
+  release. Switch when available.)
 
   Sandbox create:
+      docker create --name <carrier> <runtime_image>   # once, per runtime_image
       docker run -d --name <sid> --network host \\
          -e AGENTIX_BIND_PORT=<port> \\
-         --mount type=image,source=<runtime_image>,target=/nix,subpath=nix,readonly \\
+         --volumes-from <carrier>:ro \\
          --entrypoint /nix/runtime/bin/agentix-server \\
          <image>
 
-  `agentix-server` binds to the port from the env var. We pick a free
-  host port, pass it through, and health-check `/health` on it.
+  `agentix-server` binds to the port from `AGENTIX_BIND_PORT`. We pick
+  a free host port, pass it through, and health-check `/health` on it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import socket
 from uuid import uuid4
@@ -32,6 +46,8 @@ import httpx
 from agentix.deployment.base import Deployment, Sandbox, SandboxConfig, SandboxId, SandboxInfo
 
 logger = logging.getLogger("agentix.deployment.docker")
+
+_RUNTIME_ENTRYPOINT = "/nix/runtime/bin/agentix-server"
 
 
 async def _docker(*args: str, check: bool = True) -> tuple[int, bytes, bytes]:
@@ -45,6 +61,12 @@ async def _docker(*args: str, check: bool = True) -> tuple[int, bytes, bytes]:
     if check and rc != 0:
         raise RuntimeError(f"docker {args[0]} failed: {stderr.decode(errors='replace')}")
     return rc, stdout, stderr
+
+
+def _carrier_name(runtime_image: str) -> str:
+    """Stable name for the stopped container that holds a runtime's /nix volume."""
+    slug = hashlib.sha1(runtime_image.encode()).hexdigest()[:12]
+    return f"agentix-runtime-{slug}"
 
 
 class DockerDeployment(Deployment):
@@ -62,6 +84,19 @@ class DockerDeployment(Deployment):
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
+    async def _ensure_carrier(self, runtime_image: str) -> str:
+        """Create (if missing) a stopped container exposing runtime_image's /nix.
+
+        Stopped containers cost only metadata; one per distinct
+        runtime_image is enough regardless of how many sandboxes share it.
+        """
+        carrier = _carrier_name(runtime_image)
+        rc, _, _ = await _docker("inspect", carrier, check=False)
+        if rc == 0:
+            return carrier
+        await _docker("create", "--name", carrier, runtime_image)
+        return carrier
+
     async def create(self, config: SandboxConfig) -> Sandbox:
         sandbox_id = SandboxId(f"agentix-{uuid4().hex[:8]}")
         port = self._allocate_port()
@@ -71,13 +106,14 @@ class DockerDeployment(Deployment):
             for k, v in config.env.items():
                 env_args.extend(["-e", f"{k}={v}"])
 
+        carrier = await self._ensure_carrier(config.runtime_image)
         await _docker(
             "run", "-d",
             "--name", sandbox_id,
             "--network", "host",
             *env_args,
-            "--mount", f"type=image,source={config.runtime_image},target=/nix,subpath=nix,readonly",
-            "--entrypoint", "/nix/runtime/bin/agentix-server",
+            "--volumes-from", f"{carrier}:ro",
+            "--entrypoint", _RUNTIME_ENTRYPOINT,
             config.image,
         )
 
