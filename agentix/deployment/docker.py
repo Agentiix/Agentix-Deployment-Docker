@@ -2,20 +2,22 @@
 
 Design:
 
-  Bundle images are produced by `agentix build` and are self-contained:
-  they ship the runtime + every namespace's Python package in one venv,
-  plus any system deps under `/nix`. The deployment runs the bundle
-  image directly — no volume populate, no mount-and-merge, no custom
-  entrypoint.
+  Two images, one container. `config.runtime_image` is the generic
+  Agentix bundle from `agentix build` (carries `/nix/runtime/` with the
+  server + user code + Python deps). `config.image` is the task-specific
+  base the workload runs against. We overlay the runtime onto the task
+  image at start time using `--mount type=image` — no rebuild, no copy,
+  no intermediate state. Requires Docker Engine >= 25.0.
 
   Sandbox create:
       docker run -d --name <sid> --network host \\
          -e AGENTIX_BIND_PORT=<port> \\
-         <bundle-image>
+         --mount type=image,source=<runtime_image>,target=/nix,subpath=nix,readonly \\
+         --entrypoint /nix/runtime/bin/agentix-server \\
+         <image>
 
-  The container's `ENTRYPOINT` is `agentix-server`, which binds to the
-  port from the env var. We pick a free host port, pass it through, and
-  health-check `/health` on it.
+  `agentix-server` binds to the port from the env var. We pick a free
+  host port, pass it through, and health-check `/health` on it.
 """
 
 from __future__ import annotations
@@ -74,6 +76,8 @@ class DockerDeployment(Deployment):
             "--name", sandbox_id,
             "--network", "host",
             *env_args,
+            "--mount", f"type=image,source={config.runtime_image},target=/nix,subpath=nix,readonly",
+            "--entrypoint", "/nix/runtime/bin/agentix-server",
             config.image,
         )
 

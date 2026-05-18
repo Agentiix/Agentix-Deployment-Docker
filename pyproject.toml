@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentix-deployment-docker"
-version = "0.1.2"
+version = "0.1.3"
 description = "Docker deployment backend for Agentix"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ urls = { Homepage = "https://github.com/Agentiix/Agentix-Deployment-Docker" }
 dependencies = [
     # `Sandbox`, `Deployment` Protocol, `SandboxConfig`, `SandboxInfo`,
     # and the `SandboxId` branded NewType all live in core Agentix.
-    "agentixx>=0.1.0",
+    "agentixx>=0.1.2",
     # The backend talks to dockerd over a unix socket via httpx (which
     # core agentix already pulls in, but we declare it explicitly so
     # `pip install agentix-deployment-docker` is self-sufficient).
