@@ -27,9 +27,7 @@ from uuid import uuid4
 
 import httpx
 
-from agentix.deployment.base import Deployment, Sandbox
-from agentix.idents import SandboxId
-from agentix.models import SandboxConfig, SandboxInfo
+from agentix.deployment.base import Deployment, Sandbox, SandboxConfig, SandboxId, SandboxInfo
 
 logger = logging.getLogger("agentix.deployment.docker")
 
